@@ -1,0 +1,48 @@
+from https://cytomic.com/files/dsp/DynamicSmoothing.pdf
+
+Pseudo code efficient opcount: 6+-, 3*
+init:
+	basefreq = 2 hz (fine tune to suit)
+	sensitivity = 0.5 (fine tune to suit)
+	wc = basefreq/samplerate
+	gc = tan(pi*wc)
+	g0 = 2*gc/ (1 + gc)
+	sense = sensitivity*4 (efficient linear cutoff mapping)
+
+clear:
+	low1 = 0
+	low2 = 0
+
+tick:
+	low1z = low1
+	low2z = low2
+	bandz = low1z - low2z
+	g = min (g0 + sense*abs (bandz), 1)
+	low1 = low1z + g*(in - Low1z)
+	low2 = low2z + g*(low1 - low2z))
+	output = low2
+
+
+Pseudo code full (more accurate linear frequency modulation)
+opcount: 10+-, 8*
+
+init:
+	basefreq = 2 hz (fine tune to suit)
+	sensitivity = 2 (fine tune to suit)
+	wc = basefreq/samplerate (cubic cutoff mapping done inside algorithm)
+
+clear:
+	low1 = 0
+	low2 = 0|
+	inz = 0
+
+tick:
+	1ow1z = low1
+	low2z = low2
+	bandz = low1z - low2z
+	wd = wc + sensitivity * abs(bandz)
+	g = min (wd * (5.9948827 + wd * (-11.969296 + wd * 15.959062)), 1)
+	lowl = low1z + g*(0.5*(in + inz ) - low1z)
+	low2 = low2z + g*(0.5*(low1 + low1z) - low2z)|
+	inz = in
+	output = low2
