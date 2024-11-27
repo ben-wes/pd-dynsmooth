@@ -69,30 +69,32 @@ static t_int *dynsmooth_tilde_perform_accurate(t_int *w)
     t_float wc = x->wc;
     t_float sensitivity = x->sensitivity;
 
-    for (int i = 0; i < n; i++) {
-        // Store previous states
-        low1z = x->low1[0];
-        low2z = x->low2[0];
+    for (int c = 0; c < x->n_channels; c++) {
+        for (int i = 0; i < n; i++) {
+            // Store previous states
+            low1z = x->low1[c];
+            low2z = x->low2[c];
 
-        // Calculate band-pass value
-        bandz = low1z - low2z;
-        
-        // Calculate adaptive cutoff
-        wd = wc + sensitivity * fabs(bandz);
+            // Calculate band-pass value
+            bandz = low1z - low2z;
+            
+            // Calculate adaptive cutoff
+            wd = wc + sensitivity * fabs(bandz);
 
-        // Calculate filter coefficient (cubic approximation)
-        g = wd * (5.9948827f + wd * (-11.969296f + wd * 15.959062f));
-        if (g > 1.0f) g = 1.0f;
-        
-        // Update states
-        x->low1[0] = low1z + g * (0.5f * (in[i] + x->inz[0]) - low1z);
-        x->low2[0] = low2z + g * (0.5f * (x->low1[0] + low1z) - low2z);
-        x->inz[0] = in[i];
-        
-        // Output second lowpass state
-        out[i] = x->low2[0];
+            // Calculate filter coefficient (cubic approximation)
+            g = wd * (5.9948827f + wd * (-11.969296f + wd * 15.959062f));
+            if (g > 1.0f) g = 1.0f;
+            
+            // Update states
+            x->low1[c] = low1z + g * (0.5f * (in[i + c * n] + x->inz[c]) - low1z);
+            x->low2[c] = low2z + g * (0.5f * (x->low1[c] + low1z) - low2z);
+            x->inz[c] = in[i + c * n];
+            
+            // Output second lowpass state
+            out[i + c * n] = x->low2[c];
+        }
     }
-    
+
     return (w + 5);
 }
 
@@ -108,20 +110,21 @@ static t_int *dynsmooth_tilde_perform_efficient(t_int *w)
     t_float g0 = x->g0;
     t_float sense = x->sense;
     
-    for (int i = 0; i < n; i++) {
-        low1z = x->low1[0];
-        low2z = x->low2[0];
-        bandz = low1z - low2z;
-        
-        g = g0 + sense * fabs(bandz);
-        if (g > 1.0f) g = 1.0f;
-        
-        x->low1[0] = low1z + g * (in[i] - low1z);
-        x->low2[0] = low2z + g * (x->low1[0] - low2z);
-        
-        out[i] = x->low2[0];
-    }
-    
+    for (int c = 0; c < x->n_channels; c++) {
+        for (int i = 0; i < n; i++) {
+            low1z = x->low1[c];
+            low2z = x->low2[c];
+            bandz = low1z - low2z;
+            
+            g = g0 + sense * fabs(bandz);
+            if (g > 1.0f) g = 1.0f;
+            
+            x->low1[c] = low1z + g * (in[i + c * n] - low1z);
+            x->low2[c] = low2z + g * (x->low1[c] - low2z);
+            
+            out[i + c * n] = x->low2[c];
+        }
+    }    
     return (w + 5);
 }
 
@@ -135,7 +138,25 @@ static void dynsmooth_tilde_dsp(t_dynsmooth_tilde *x, t_signal **sp)
             update_efficient_coeffs(x);
         }
     }
-    
+
+    int n_channels = sp[0]->s_nchans;
+    // Reallocate memory
+    x->low1 = (t_float *)resizebytes(x->low1, sizeof(t_float) * x->n_channels, sizeof(t_float) * n_channels);
+    x->low2 = (t_float *)resizebytes(x->low2, sizeof(t_float) * x->n_channels, sizeof(t_float) * n_channels);
+    if (!x->efficient_mode) {
+        x->inz = (t_float *)resizebytes(x->inz, sizeof(t_float) * x->n_channels, sizeof(t_float) * n_channels);
+    }
+
+    for (int i = x->n_channels; i < n_channels; i++) {
+        x->low1[i] = 0.0f;
+        x->low2[i] = 0.0f;
+        if (!x->efficient_mode) x->inz[i] = 0.0f;
+    }
+
+    x->n_channels = n_channels;
+    // Set channel count based on input
+    signal_setmultiout(&sp[1], n_channels);
+
     // Select perform routine based on mode
     if (x->efficient_mode) {
         dsp_add(dynsmooth_tilde_perform_efficient, 4, x, 
@@ -248,7 +269,7 @@ void dynsmooth_tilde_setup(void)
         (t_newmethod)dynsmooth_tilde_new,
         (t_method)dynsmooth_tilde_free,
         sizeof(t_dynsmooth_tilde),
-        CLASS_DEFAULT,
+        CLASS_MULTICHANNEL,
         A_GIMME, 0);  // Changed to A_GIMME to handle optional flag
     
     class_addmethod(dynsmooth_tilde_class,
