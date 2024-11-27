@@ -3,7 +3,7 @@
 dynamic smoothing external (and vanilla abstractions) for Pd (Pure Data)
 based on https://cytomic.com/files/dsp/DynamicSmoothing.pdf
 
-For more context on discussion see https://forum.pdpatchrepo.info/topic/14933/dynamic-smoothing-andrew-simper-style
+For more context and discussion, see https://forum.pdpatchrepo.info/topic/14933/dynamic-smoothing-andrew-simper-style
 
 ![dynsmooth~-help.pd](dynsmooth~-help.pd.png)
 
