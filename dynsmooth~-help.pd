@@ -18,7 +18,7 @@
 #X obj 534 100 hsl 136 16 0.01 100 1 0 empty empty empty -2 -8 0 10 #fcfcfc #000000 #000000 0 1;
 #X floatatom 531 121 5 0 0 0 - - - 0;
 #X msg 531 141 sensitivity \$1;
-#X text 49 570 ^ for [show~] object \, see https://github.com/ben-wes/pdlua-show_tilde, f 69;
+#X text 49 564 ^ for [show~] object \, see https://github.com/ben-wes/pdlua-show_tilde, f 69;
 #X obj 531 341 *~ 1;
 #X obj 552 320 tgl 16 0 empty empty empty 0 -8 0 10 #fcfcfc #000000 #000000 0 1;
 #X obj 531 279 dynsmooth~ -e 10 0.01;
