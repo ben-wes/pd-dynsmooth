@@ -1,20 +1,22 @@
 /*
 dynsmooth~ - Dynamic smoothing filter external for Pure Data
-2024
+Ben Wesch, 2024
 Functionality:
 - Implements adaptive signal smoothing with dynamic cutoff
-- Amount of smoothing adjusts automatically based on signal characteristics
+- Two modes of operation: accurate (default) and efficient
 - Base frequency and sensitivity configurable via creation arguments
 - Signal rate processing
-- Supports multichannel processing
 Usage:
-1. Creation args: [basefreq] [sensitivity] (defaults: 2, 2)
+1. Creation args: [-e] [basefreq] [sensitivity]
+   -e: Optional flag for efficient mode (default is accurate mode)
+   basefreq: Base frequency in Hz (default: 2)
+   sensitivity: Sensitivity factor (default: accurate=2, efficient=0.5)
 2. Signal inlet: Input signal
 3. Outlet: Smoothed signal
 Messages:
 - clear: Reset filter states to zero
 - basefreq [float]: Set base frequency in Hz (lower = more smoothing)
-- sensitivity [float]: Set sensitivity factor (higher = more dynamic response)
+- sensitivity [float]: Set sensitivity factor
 */
 
 #include "m_pd.h"
@@ -29,24 +31,34 @@ typedef struct _dynsmooth_tilde {
     // Filter state per channel
     t_float *low1;         // First lowpass state
     t_float *low2;         // Second lowpass state
-    t_float *inz;          // Input z-1 state
+    t_float *inz;          // Input z-1 state (only used in accurate mode)
     
     // Parameters
     t_float basefreq;      // Base frequency in Hz
     t_float sensitivity;   // Sensitivity factor
     t_float wc;           // Normalized cutoff frequency
+    t_float gc;           // Tan-based coefficient (efficient mode)
+    t_float g0;           // Base coefficient (efficient mode)
+    t_float sense;        // Scaled sensitivity (efficient mode)
     
     int n_channels;        // Number of channels
     t_float sr;           // Sample rate
+    int efficient_mode;    // Mode flag (0 = accurate, 1 = efficient)
 } t_dynsmooth_tilde;
 
-// Helper function to calculate normalized cutoff
+// Helper functions
 static t_float calc_wc(t_float basefreq, t_float sr) {
     return (2.0f * M_PI * basefreq) / sr;
 }
 
-// Perform routine - processes audio at signal rate
-static t_int *dynsmooth_tilde_perform(t_int *w)
+static void update_efficient_coeffs(t_dynsmooth_tilde *x) {
+    x->gc = tanf(M_PI * x->wc);
+    x->g0 = 2.0f * x->gc / (1.0f + x->gc);
+    x->sense = x->sensitivity * 4.0f;
+}
+
+// Perform routine for accurate mode
+static t_int *dynsmooth_tilde_perform_accurate(t_int *w)
 {
     t_dynsmooth_tilde *x = (t_dynsmooth_tilde *)(w[1]);
     int n = (int)(w[2]);
@@ -56,19 +68,18 @@ static t_int *dynsmooth_tilde_perform(t_int *w)
     t_float low1z, low2z, bandz, wd, g;
     t_float wc = x->wc;
     t_float sensitivity = x->sensitivity;
-    
-    // Process samples
+
     for (int i = 0; i < n; i++) {
         // Store previous states
         low1z = x->low1[0];
         low2z = x->low2[0];
-        
+
         // Calculate band-pass value
         bandz = low1z - low2z;
         
         // Calculate adaptive cutoff
         wd = wc + sensitivity * fabs(bandz);
-        
+
         // Calculate filter coefficient (cubic approximation)
         g = wd * (5.9948827f + wd * (-11.969296f + wd * 15.959062f));
         if (g > 1.0f) g = 1.0f;
@@ -85,62 +96,135 @@ static t_int *dynsmooth_tilde_perform(t_int *w)
     return (w + 5);
 }
 
+// Perform routine for efficient mode
+static t_int *dynsmooth_tilde_perform_efficient(t_int *w)
+{
+    t_dynsmooth_tilde *x = (t_dynsmooth_tilde *)(w[1]);
+    int n = (int)(w[2]);
+    t_sample *in = (t_sample *)(w[3]);
+    t_sample *out = (t_sample *)(w[4]);
+    
+    t_float low1z, low2z, bandz, g;
+    t_float g0 = x->g0;
+    t_float sense = x->sense;
+    
+    for (int i = 0; i < n; i++) {
+        low1z = x->low1[0];
+        low2z = x->low2[0];
+        bandz = low1z - low2z;
+        
+        g = g0 + sense * fabs(bandz);
+        if (g > 1.0f) g = 1.0f;
+        
+        x->low1[0] = low1z + g * (in[i] - low1z);
+        x->low2[0] = low2z + g * (x->low1[0] - low2z);
+        
+        out[i] = x->low2[0];
+    }
+    
+    return (w + 5);
+}
+
 static void dynsmooth_tilde_dsp(t_dynsmooth_tilde *x, t_signal **sp)
 {
     // Update sample rate if changed
     if (x->sr != sp[0]->s_sr) {
         x->sr = sp[0]->s_sr;
         x->wc = calc_wc(x->basefreq, x->sr);
+        if (x->efficient_mode) {
+            update_efficient_coeffs(x);
+        }
     }
     
-    dsp_add(dynsmooth_tilde_perform, 4, x, 
-            sp[0]->s_n, sp[0]->s_vec, sp[1]->s_vec);
+    // Select perform routine based on mode
+    if (x->efficient_mode) {
+        dsp_add(dynsmooth_tilde_perform_efficient, 4, x, 
+                sp[0]->s_n, sp[0]->s_vec, sp[1]->s_vec);
+    } else {
+        dsp_add(dynsmooth_tilde_perform_accurate, 4, x, 
+                sp[0]->s_n, sp[0]->s_vec, sp[1]->s_vec);
+    }
 }
 
-// Message handler for 'clear' message
 static void dynsmooth_tilde_clear(t_dynsmooth_tilde *x)
 {
     for (int i = 0; i < x->n_channels; i++) {
         x->low1[i] = 0.0f;
         x->low2[i] = 0.0f;
-        x->inz[i] = 0.0f;
+        if (!x->efficient_mode) {
+            x->inz[i] = 0.0f;
+        }
     }
 }
 
-// Message handler for 'basefreq' message
 static void dynsmooth_tilde_basefreq(t_dynsmooth_tilde *x, t_floatarg f)
 {
     if (f > 0) {
         x->basefreq = f;
         x->wc = calc_wc(f, x->sr);
+        if (x->efficient_mode) {
+            update_efficient_coeffs(x);
+        }
     }
 }
 
-// Message handler for 'sensitivity' message
 static void dynsmooth_tilde_sensitivity(t_dynsmooth_tilde *x, t_floatarg f)
 {
     x->sensitivity = f;
+    if (x->efficient_mode) {
+        x->sense = f * 4.0f;
+    }
 }
 
-static void *dynsmooth_tilde_new(t_floatarg basefreq, t_floatarg sensitivity)
+static void *dynsmooth_tilde_new(t_symbol *s, int argc, t_atom *argv)
 {
+    (void)s;
+
     t_dynsmooth_tilde *x = (t_dynsmooth_tilde *)pd_new(dynsmooth_tilde_class);
     
-    // Set default values if not specified
-    x->basefreq = basefreq > 0 ? basefreq : 2.0f;
-    x->sensitivity = sensitivity > 0 ? sensitivity : 2.0f;
+    // Parse arguments
+    x->efficient_mode = 0;  // Default to accurate mode
+    x->basefreq = 2.0f;    // Default base frequency
+    x->sensitivity = 2.0f;  // Default sensitivity for accurate mode
     
-    // Initialize single channel
+    // Check for efficient mode flag
+    if (argc && argv->a_type == A_SYMBOL && atom_getsymbol(argv) == gensym("-e")) {
+        x->efficient_mode = 1;
+        x->sensitivity = 0.5f; // Different default for efficient mode
+        argc--, argv++;
+    }
+    
+    // Get base frequency if specified
+    if (argc) {
+        float basefreq = atom_getfloat(argv);
+        if (basefreq > 0) x->basefreq = basefreq;
+        argc--, argv++;
+    }
+
+    // Get sensitivity if specified
+    if (argc) {
+        float sens = atom_getfloat(argv);
+        if (sens > 0) x->sensitivity = sens;
+        argc--, argv++;
+    }
+    
+    // Initialize
     x->n_channels = 1;
     x->sr = sys_getsr();
     x->wc = calc_wc(x->basefreq, x->sr);
     
-    // Allocate memory for states
+    if (x->efficient_mode) {
+        update_efficient_coeffs(x);
+    }
+    
+    // Allocate memory
     x->low1 = (t_float *)getbytes(sizeof(t_float));
     x->low2 = (t_float *)getbytes(sizeof(t_float));
-    x->inz = (t_float *)getbytes(sizeof(t_float));
+    if (!x->efficient_mode) {
+        x->inz = (t_float *)getbytes(sizeof(t_float));
+    }
     
-    // Initialize states to zero
+    // Initialize states
     dynsmooth_tilde_clear(x);
     
     // Create signal outlet
@@ -153,7 +237,9 @@ static void dynsmooth_tilde_free(t_dynsmooth_tilde *x)
 {
     if (x->low1) freebytes(x->low1, x->n_channels * sizeof(t_float));
     if (x->low2) freebytes(x->low2, x->n_channels * sizeof(t_float));
-    if (x->inz) freebytes(x->inz, x->n_channels * sizeof(t_float));
+    if (!x->efficient_mode && x->inz) {
+        freebytes(x->inz, x->n_channels * sizeof(t_float));
+    }
 }
 
 void dynsmooth_tilde_setup(void)
@@ -163,7 +249,7 @@ void dynsmooth_tilde_setup(void)
         (t_method)dynsmooth_tilde_free,
         sizeof(t_dynsmooth_tilde),
         CLASS_DEFAULT,
-        A_DEFFLOAT, A_DEFFLOAT, 0);
+        A_GIMME, 0);  // Changed to A_GIMME to handle optional flag
     
     class_addmethod(dynsmooth_tilde_class,
         (t_method)dynsmooth_tilde_dsp, gensym("dsp"), A_CANT, 0);
