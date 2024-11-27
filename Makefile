@@ -3,9 +3,9 @@ lib.name = dynsmooth~
 class.sources = dynsmooth~.c
 
 datafiles = \
-	dynmooth~-help.pd \
-	dynamicsmooth~.pd \
-	dynamicsmooth-efficient~.pd
+	dynsmooth~-help.pd \
+	dynsmooth-abs~.pd \
+	dynsmooth-abs-efficient~.pd
 
 objectsdir = ./build
 PDLIBBUILDER_DIR=./pd-lib-builder
